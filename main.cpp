@@ -4,9 +4,124 @@
 #include <chrono>
 #include <filesystem>
 #include <cstdlib>
+
 #include <curl/curl.h>
 
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <unistd.h>
+
 namespace fs = std::filesystem;
+
+
+// =====================================================
+// HEALTH SERVER FOR RENDER
+// =====================================================
+
+void startHealthServer()
+{
+    const char* portEnv = std::getenv("PORT");
+
+    int port = 10000;
+
+    if (portEnv)
+    {
+        try
+        {
+            port = std::stoi(portEnv);
+        }
+        catch (...)
+        {
+            port = 10000;
+        }
+    }
+
+    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (server_fd < 0)
+    {
+        std::cerr << "Failed to create HTTP socket." << std::endl;
+        return;
+    }
+
+    int opt = 1;
+
+    setsockopt(
+        server_fd,
+        SOL_SOCKET,
+        SO_REUSEADDR,
+        &opt,
+        sizeof(opt)
+    );
+
+    sockaddr_in address{};
+
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = INADDR_ANY;
+    address.sin_port = htons(port);
+
+    if (
+        bind(
+            server_fd,
+            (struct sockaddr*)&address,
+            sizeof(address)
+        ) < 0
+    )
+    {
+        std::cerr << "Failed to bind HTTP server." << std::endl;
+
+        close(server_fd);
+
+        return;
+    }
+
+    if (listen(server_fd, 10) < 0)
+    {
+        std::cerr << "Failed to listen on HTTP server." << std::endl;
+
+        close(server_fd);
+
+        return;
+    }
+
+    std::cout
+        << "Health server listening on port "
+        << port
+        << std::endl;
+
+    while (true)
+    {
+        int client =
+            accept(
+                server_fd,
+                nullptr,
+                nullptr
+            );
+
+        if (client < 0)
+        {
+            continue;
+        }
+
+        const char* response =
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: text/plain\r\n"
+            "Content-Length: 2\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+            "OK";
+
+        send(
+            client,
+            response,
+            117,
+            0
+        );
+
+        close(client);
+    }
+}
+
 
 // =====================================================
 // CURL WRITE CALLBACK
@@ -16,7 +131,8 @@ size_t WriteCallback(
     void* contents,
     size_t size,
     size_t nmemb,
-    std::string* output)
+    std::string* output
+)
 {
     size_t totalSize = size * nmemb;
 
@@ -28,13 +144,15 @@ size_t WriteCallback(
     return totalSize;
 }
 
+
 // =====================================================
 // SEND HTTP REQUEST
 // =====================================================
 
 std::string sendRequest(
     CURL* curl,
-    const std::string& url)
+    const std::string& url
+)
 {
     std::string response;
 
@@ -72,13 +190,15 @@ std::string sendRequest(
     return response;
 }
 
+
 // =====================================================
 // GET VALUE FROM JSON
 // =====================================================
 
 std::string getValue(
     const std::string& json,
-    const std::string& key)
+    const std::string& key
+)
 {
     size_t pos =
         json.find(key);
@@ -100,12 +220,14 @@ std::string getValue(
     );
 }
 
+
 // =====================================================
 // GET MESSAGE TEXT
 // =====================================================
 
 std::string getText(
-    const std::string& json)
+    const std::string& json
+)
 {
     std::string key =
         "\"text\":\"";
@@ -130,6 +252,7 @@ std::string getText(
     );
 }
 
+
 // =====================================================
 // SEND TELEGRAM MESSAGE
 // =====================================================
@@ -138,7 +261,8 @@ void sendMessage(
     CURL* curl,
     const std::string& botToken,
     const std::string& chatID,
-    const std::string& message)
+    const std::string& message
+)
 {
     std::string url =
         "https://api.telegram.org/bot" +
@@ -154,6 +278,7 @@ void sendMessage(
     );
 }
 
+
 // =====================================================
 // SEND VIDEO TO TELEGRAM
 // =====================================================
@@ -162,7 +287,8 @@ bool sendVideo(
     CURL* curl,
     const std::string& botToken,
     const std::string& chatID,
-    const std::string& fileName)
+    const std::string& fileName
+)
 {
     std::string url =
         "https://api.telegram.org/bot" +
@@ -174,7 +300,13 @@ bool sendVideo(
     curl_mime* mime =
         curl_mime_init(curl);
 
+    if (!mime)
+    {
+        return false;
+    }
+
     // chat_id
+
     curl_mimepart* part =
         curl_mime_addpart(mime);
 
@@ -189,7 +321,9 @@ bool sendVideo(
         CURL_ZERO_TERMINATED
     );
 
+
     // video
+
     part =
         curl_mime_addpart(mime);
 
@@ -203,6 +337,7 @@ bool sendVideo(
         fileName.c_str()
     );
 
+
     curl_easy_setopt(
         curl,
         CURLOPT_URL,
@@ -214,6 +349,7 @@ bool sendVideo(
         CURLOPT_MIMEPOST,
         mime
     );
+
 
     std::string response;
 
@@ -229,10 +365,13 @@ bool sendVideo(
         &response
     );
 
+
     CURLcode result =
         curl_easy_perform(curl);
 
+
     curl_mime_free(mime);
+
 
     if (result != CURLE_OK)
     {
@@ -244,6 +383,7 @@ bool sendVideo(
         return false;
     }
 
+
     std::cout
         << "Telegram response: "
         << response
@@ -252,13 +392,15 @@ bool sendVideo(
     return true;
 }
 
+
 // =====================================================
 // RUN YT-DLP - LINUX VERSION
 // =====================================================
 
 bool downloadVideo(
     const std::string& videoURL,
-    const std::string& outputPath)
+    const std::string& outputPath
+)
 {
     std::cout
         << "Starting yt-dlp..."
@@ -274,14 +416,17 @@ bool downloadVideo(
         videoURL +
         "\"";
 
+
     std::cout
         << "Running yt-dlp..."
         << std::endl;
+
 
     int result =
         std::system(
             commandLine.c_str()
         );
+
 
     if (result == 0)
     {
@@ -291,6 +436,7 @@ bool downloadVideo(
 
         return true;
     }
+
 
     std::cout
         << "yt-dlp failed."
@@ -304,6 +450,7 @@ bool downloadVideo(
     return false;
 }
 
+
 // =====================================================
 // MAIN
 // =====================================================
@@ -311,11 +458,23 @@ bool downloadVideo(
 int main()
 {
     // =================================================
+    // START RENDER HEALTH SERVER
+    // =================================================
+
+    std::thread healthServer(
+        startHealthServer
+    );
+
+    healthServer.detach();
+
+
+    // =================================================
     // GET BOT TOKEN FROM ENVIRONMENT VARIABLE
     // =================================================
 
     const char* token =
         std::getenv("BOT_TOKEN");
+
 
     if (!token)
     {
@@ -326,8 +485,10 @@ int main()
         return 1;
     }
 
+
     std::string botToken =
         token;
+
 
     // =================================================
     // INITIALIZE CURL
@@ -335,6 +496,7 @@ int main()
 
     CURL* curl =
         curl_easy_init();
+
 
     if (!curl)
     {
@@ -345,11 +507,14 @@ int main()
         return 1;
     }
 
+
     std::cout
         << "Bot is running..."
         << std::endl;
 
+
     long long offset = 0;
+
 
     // =================================================
     // BOT LOOP
@@ -363,11 +528,13 @@ int main()
             "/getUpdates?timeout=30&offset=" +
             std::to_string(offset);
 
+
         std::string response =
             sendRequest(
                 curl,
                 url
             );
+
 
         // =================================================
         // CHECK NEW MESSAGE
@@ -379,12 +546,16 @@ int main()
             ) != std::string::npos
         )
         {
-            // Update ID
+            // =================================================
+            // UPDATE ID
+            // =================================================
+
             std::string updateID =
                 getValue(
                     response,
                     "\"update_id\":"
                 );
+
 
             if (!updateID.empty())
             {
@@ -394,23 +565,33 @@ int main()
                     ) + 1;
             }
 
-            // Chat ID
+
+            // =================================================
+            // CHAT ID
+            // =================================================
+
             std::string chatID =
                 getValue(
                     response,
                     "\"chat\":{\"id\":"
                 );
 
-            // Message text
+
+            // =================================================
+            // MESSAGE TEXT
+            // =================================================
+
             std::string text =
                 getText(
                     response
                 );
 
+
             std::cout
                 << "Received: "
                 << text
                 << std::endl;
+
 
             // =================================================
             // START COMMAND
@@ -425,10 +606,12 @@ int main()
                     "Welcome!%20Send%20me%20a%20Facebook%20video%20link."
                 );
 
+
                 std::cout
                     << "Start message sent."
                     << std::endl;
             }
+
 
             // =================================================
             // FACEBOOK LINK
@@ -448,6 +631,7 @@ int main()
                     << "Facebook link received!"
                     << std::endl;
 
+
                 sendMessage(
                     curl,
                     botToken,
@@ -455,12 +639,14 @@ int main()
                     "Downloading%20your%20video..."
                 );
 
+
                 // =================================================
                 // LINUX TEMPORARY VIDEO PATH
                 // =================================================
 
                 std::string videoPath =
                     "/tmp/facebook_video.mp4";
+
 
                 if (
                     fs::exists(
@@ -473,6 +659,7 @@ int main()
                     );
                 }
 
+
                 // =================================================
                 // DOWNLOAD
                 // =================================================
@@ -481,11 +668,13 @@ int main()
                     << "Downloading..."
                     << std::endl;
 
+
                 bool downloaded =
                     downloadVideo(
                         text,
                         videoPath
                     );
+
 
                 // =================================================
                 // DOWNLOAD SUCCESS
@@ -503,12 +692,14 @@ int main()
                         << "Download successful!"
                         << std::endl;
 
+
                     sendMessage(
                         curl,
                         botToken,
                         chatID,
                         "Uploading%20video..."
                     );
+
 
                     // =================================================
                     // SEND VIDEO
@@ -522,11 +713,13 @@ int main()
                             videoPath
                         );
 
+
                     if (uploaded)
                     {
                         std::cout
                             << "Video sent successfully!"
                             << std::endl;
+
 
                         sendMessage(
                             curl,
@@ -541,6 +734,7 @@ int main()
                             << "Failed to send video."
                             << std::endl;
 
+
                         sendMessage(
                             curl,
                             botToken,
@@ -549,7 +743,11 @@ int main()
                         );
                     }
 
-                    // Delete downloaded video
+
+                    // =================================================
+                    // DELETE DOWNLOADED VIDEO
+                    // =================================================
+
                     if (
                         fs::exists(
                             videoPath
@@ -562,6 +760,7 @@ int main()
                     }
                 }
 
+
                 // =================================================
                 // DOWNLOAD FAILED
                 // =================================================
@@ -571,6 +770,7 @@ int main()
                     std::cout
                         << "Download failed!"
                         << std::endl;
+
 
                     sendMessage(
                         curl,
@@ -582,11 +782,16 @@ int main()
             }
         }
 
-        // Small delay
+
+        // =================================================
+        // SMALL DELAY
+        // =================================================
+
         std::this_thread::sleep_for(
             std::chrono::milliseconds(500)
         );
     }
+
 
     curl_easy_cleanup(curl);
 
